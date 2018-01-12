@@ -1,6 +1,5 @@
-// RUN: %swift %s 2>&1 | %FileCheck %s
+// RUN: cat %S/../Sources/PrettyStackTrace/PrettyStackTrace.swift %s | swiftc -c -emit-executable -o %t - && %t 2>&1 | %FileCheck %s
 
-import PrettyStackTrace
 #if os(macOS)
 import Darwin
 #elseif os(Linux)

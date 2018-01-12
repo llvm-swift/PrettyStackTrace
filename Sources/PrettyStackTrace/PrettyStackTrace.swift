@@ -7,6 +7,25 @@
 
 import Foundation
 
+/// A set of signals that would normally kill the program. We handle these
+/// signals by dumping the pretty stack trace description.
+let killSigs = [
+  SIGILL, SIGABRT, SIGTRAP, SIGFPE,
+  SIGBUS, SIGSEGV, SIGSYS, SIGQUIT
+]
+
+/// Needed because the type `sigaction` conflicts with the function `sigaction`.
+typealias SigAction = sigaction
+
+/// A wrapper that associates a signal handler with the number it handles.
+struct SigHandler {
+  /// The signal action, called when the handler is called.
+  var action: SigAction
+
+  /// The signal number this will fire on.
+  var signalNumber: Int32
+}
+
 /// Represents an entry in a stack trace. Contains information necessary to
 /// reconstruct what was happening at the time this function was executed.
 private struct TraceEntry: CustomStringConvertible {
@@ -102,6 +121,11 @@ private var __stackContextKey = pthread_key_t()
 /// Creates a key for a thread-local reference to a PrettyStackTraceHandler.
 private var stackContextKey: pthread_key_t = {
   pthread_key_create(&__stackContextKey) { ptr in
+    #if os(Linux)
+    guard let ptr = ptr else {
+      return
+    }
+    #endif
     let unmanaged = Unmanaged<PrettyStackTraceManager>.fromOpaque(ptr)
     unmanaged.release()
   }
@@ -122,29 +146,15 @@ private func threadLocalHandler() -> PrettyStackTraceManager {
   return unmanaged.takeUnretainedValue()
 }
 
-/// A set of signals that would normally kill the program. We handle these
-/// signals by dumping the pretty stack trace description.
-let killSigs = [
-  SIGILL, SIGABRT, SIGTRAP, SIGFPE,
-  SIGBUS, SIGSEGV, SIGSYS, SIGQUIT
-]
-
-/// Needed because the type `sigaction` conflicts with the function `sigaction`.
-typealias SigAction = sigaction
-
-/// A wrapper that associates a signal handler with the number it handles.
-struct SigHandler {
-  /// The signal action, called when the handler is called.
-  var action: SigAction
-
-  /// The signal number this will fire on.
-  var signalNumber: Int32
+extension Int32 {
+  /// HACK: Just for compatibility's sake on Linux.
+  public init(bitPattern: Int32) { self = bitPattern }
 }
 
 /// Registers the pretty stack trace signal handlers.
 private func registerHandler(signal: Int32) {
   var newHandler = SigAction()
-  newHandler.__sigaction_u.__sa_handler = { signalNumber in
+  let cHandler: @convention(c) (Int32) -> Swift.Void = { signalNumber in
     unregisterHandlers()
 
     // Unblock all potentially blocked kill signals
@@ -155,13 +165,23 @@ private func registerHandler(signal: Int32) {
     threadLocalHandler().dump(signalNumber)
     exit(signalNumber)
   }
-  newHandler.sa_flags = SA_NODEFER | SA_RESETHAND | SA_ONSTACK
+  #if os(macOS)
+  newHandler.__sigaction_u.__sa_handler = cHandler
+  #elseif os(Linux)
+  newHandler.__sigaction_handler = .init(sa_handler: cHandler)
+  #else
+  fatalError("Cannot register signal action handler on this platform")
+  #endif
+  newHandler.sa_flags = Int32(bitPattern: SA_NODEFER) |
+                        Int32(bitPattern: SA_RESETHAND) |
+                        Int32(bitPattern: SA_ONSTACK)
   sigemptyset(&newHandler.sa_mask)
 
   var handler = SigAction()
   if sigaction(signal, &newHandler, &handler) != 0 {
     let sh = SigHandler(action: handler, signalNumber: signal)
     registeredSignalInfo[numRegisteredSignalInfo] = sh
+    numRegisteredSignalInfo += 1
   }
 }
 
@@ -189,11 +209,16 @@ private var newAltStackPointer: UnsafeMutableRawPointer?
 /// Sets up an alternate stack and registers all signal handlers with the
 /// system.
 private let __setupStackOnce: Void = {
-  let altStackSize = UInt(MINSIGSTKSZ) + (UInt(64) * 1024)
+  #if os(macOS)
+  typealias SSSize = UInt
+  #else
+  typealias SSSize = Int
+  #endif
+  let altStackSize = SSSize(MINSIGSTKSZ) + (SSSize(64) * 1024)
 
   /// Make sure we're not currently executing on an alternate stack already.
   guard sigaltstack(nil, &oldAltStack) == 0 else { return }
-  guard oldAltStack.ss_flags & SS_ONSTACK == 0 else { return }
+  guard Int(oldAltStack.ss_flags) & Int(SS_ONSTACK) == 0 else { return }
   guard oldAltStack.ss_sp == nil || oldAltStack.ss_size < altStackSize else {
     return
   }
@@ -233,4 +258,3 @@ public func trace<T>(_ action: String, file: StaticString = #file,
   defer { h.pop() }
   return try actions()
 }
-
