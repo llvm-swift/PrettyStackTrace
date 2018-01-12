@@ -78,13 +78,13 @@ private class PrettyStackTraceManager {
   init() {
     let msg = "Stack dump:\n"
     stackDumpMsg = StackEntry(prev: nil,
-                              data: strndup(msg, msg.count),
-                              count: msg.count)
+                              data: strndup(msg, msg.utf8.count),
+                              count: msg.utf8.count)
   }
 
   /// Pushes the description of a trace entry to the stack.
   func push(_ entry: TraceEntry) {
-    let str = "\(entry.description)\n"
+    let str = "  \(entry.description)\n"
     let newEntry = StackEntry(prev: stack,
                               data: strndup(str, str.count),
                               count: str.count)
