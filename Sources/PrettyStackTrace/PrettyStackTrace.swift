@@ -32,22 +32,41 @@ private struct TraceEntry: CustomStringConvertible {
   }
 }
 
-var stderr = FileHandle.standardError
+// HACK: This array must be pre-allocated and contains functionally immortal
+// C-strings because String may allocate when passed to write(1).
+var registeredSignalInfo =
+  UnsafeMutableBufferPointer<SigHandler>(start:
+    UnsafeMutablePointer.allocate(capacity: killSigs.count),
+                                         count: killSigs.count)
+var numRegisteredSignalInfo = 0
 
 /// A class managing a stack of trace entries. When a particular thread gets
 /// a kill signal, this handler will dump all the entries in the tack trace and
 /// end the process.
 private class PrettyStackTraceManager {
+  struct RawStackEntry {
+    let data: UnsafeMutablePointer<Int8>
+    let count: Int
+  }
+
   /// Keeps a stack of serialized trace entries in reverse order.
-  /// - Note: This keeps strings, because it's not particularly safe to
+  /// - Note: This keeps strings, because it's not safe to
   ///         construct the strings in the signal handler directly.
-  var stack = [Data]()
-  let stackDumpMsgData = "Stack dump:\n".data(using: .utf8)!
+  var stack = [RawStackEntry]()
+
+  private let stackDumpMsg: RawStackEntry
+  init() {
+    let msg = "Stack dump:\n"
+    stackDumpMsg = RawStackEntry(data: strndup(msg, msg.count),
+                                 count: msg.count)
+  }
 
   /// Pushes the description of a trace entry to the stack.
   func push(_ entry: TraceEntry) {
     let str = "\(entry.description)\n"
-    stack.insert(str.data(using: .utf8)!, at: 0)
+    let entry = RawStackEntry(data: strndup(str, str.count),
+                              count: str.count)
+    stack.insert(entry, at: 0)
   }
 
   /// Pops the latest trace entry off the stack.
@@ -59,9 +78,15 @@ private class PrettyStackTraceManager {
   /// Dumps the stack entries to standard error, starting with the most
   /// recent entry.
   func dump(_ signal: Int32) {
-    stderr.write(stackDumpMsgData)
-    for entry in stack {
-      stderr.write(entry)
+    write(STDERR_FILENO, stackDumpMsg.data, stackDumpMsg.count)
+    let stackLimit = stack.count
+    stack.withUnsafeBufferPointer { buffer in
+      var i = 0
+      while i < stackLimit {
+        let bufItem = buffer[i]
+        write(STDERR_FILENO, bufItem.data, bufItem.count)
+        i += 1
+      }
     }
   }
 }
@@ -112,13 +137,10 @@ struct SigHandler {
   var signalNumber: Int32
 }
 
-/// The currently registered set of signal handlers.
-private var handlers = [SigHandler]()
-
 /// Registers the pretty stack trace signal handlers.
 private func registerHandler(signal: Int32) {
   var newHandler = SigAction()
-  newHandler.__sigaction_u.__sa_handler = {
+  newHandler.__sigaction_u.__sa_handler = { signalNumber in
     unregisterHandlers()
 
     // Unblock all potentially blocked kill signals
@@ -126,8 +148,8 @@ private func registerHandler(signal: Int32) {
     sigfillset(&sigMask)
     sigprocmask(SIG_UNBLOCK, &sigMask, nil)
 
-    threadLocalHandler().dump($0)
-    exit(-1)
+    threadLocalHandler().dump(signalNumber)
+    exit(signalNumber)
   }
   newHandler.sa_flags = SA_NODEFER | SA_RESETHAND | SA_ONSTACK
   sigemptyset(&newHandler.sa_mask)
@@ -135,15 +157,23 @@ private func registerHandler(signal: Int32) {
   var handler = SigAction()
   if sigaction(signal, &newHandler, &handler) != 0 {
     let sh = SigHandler(action: handler, signalNumber: signal)
-    handlers.append(sh)
+    registeredSignalInfo[numRegisteredSignalInfo] = sh
   }
 }
 
 /// Unregisters all pretty stack trace signal handlers.
 private func unregisterHandlers() {
-  while var handler = handlers.popLast() {
-    sigaction(handler.signalNumber, &handler.action, nil)
+  var i = 0
+  while i < killSigs.count {
+    sigaction(registeredSignalInfo[i].signalNumber,
+              &registeredSignalInfo[i].action, nil)
+    i += 1
   }
+
+  // HACK: Must leak the old registerdSignalInfo because we cannot safely
+  //       free inside a signal handler.
+  // cannot: free(registeredSignalInfo)
+  numRegisteredSignalInfo = 0
 }
 
 /// A reference to the previous alternate stack, if any.
