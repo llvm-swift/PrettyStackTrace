@@ -1,6 +1,4 @@
-// RUN: %swift %s 2>&1 | %FileCheck %s
-
-import PrettyStackTrace
+// RUN: cat %S/../Sources/PrettyStackTrace/PrettyStackTrace.swift %s | swiftc -c -emit-executable -o %t - && %t 2>&1 | %FileCheck %s
 
 func overflow() {
   print("", terminator: "")

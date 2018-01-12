@@ -7,6 +7,25 @@
 
 import Foundation
 
+/// A set of signals that would normally kill the program. We handle these
+/// signals by dumping the pretty stack trace description.
+let killSigs = [
+  SIGILL, SIGABRT, SIGTRAP, SIGFPE,
+  SIGBUS, SIGSEGV, SIGSYS, SIGQUIT
+]
+
+/// Needed because the type `sigaction` conflicts with the function `sigaction`.
+typealias SigAction = sigaction
+
+/// A wrapper that associates a signal handler with the number it handles.
+struct SigHandler {
+  /// The signal action, called when the handler is called.
+  var action: SigAction
+
+  /// The signal number this will fire on.
+  var signalNumber: Int32
+}
+
 /// Represents an entry in a stack trace. Contains information necessary to
 /// reconstruct what was happening at the time this function was executed.
 private struct TraceEntry: CustomStringConvertible {
@@ -32,36 +51,65 @@ private struct TraceEntry: CustomStringConvertible {
   }
 }
 
-var stderr = FileHandle.standardError
+// HACK: This array must be pre-allocated and contains functionally immortal
+// C-strings because String may allocate when passed to write(1).
+var registeredSignalInfo =
+  UnsafeMutableBufferPointer<SigHandler>(start:
+    UnsafeMutablePointer.allocate(capacity: killSigs.count),
+                                         count: killSigs.count)
+var numRegisteredSignalInfo = 0
 
 /// A class managing a stack of trace entries. When a particular thread gets
 /// a kill signal, this handler will dump all the entries in the tack trace and
 /// end the process.
 private class PrettyStackTraceManager {
+  struct StackEntry {
+    var prev: UnsafeMutablePointer<StackEntry>?
+    let data: UnsafeMutablePointer<Int8>
+    let count: Int
+  }
+
   /// Keeps a stack of serialized trace entries in reverse order.
-  /// - Note: This keeps strings, because it's not particularly safe to
+  /// - Note: This keeps strings, because it's not safe to
   ///         construct the strings in the signal handler directly.
-  var stack = [Data]()
-  let stackDumpMsgData = "Stack dump:\n".data(using: .utf8)!
+  var stack: UnsafeMutablePointer<StackEntry>? = nil
+
+  private let stackDumpMsg: StackEntry
+  init() {
+    let msg = "Stack dump:\n"
+    stackDumpMsg = StackEntry(prev: nil,
+                              data: strndup(msg, msg.count),
+                              count: msg.count)
+  }
 
   /// Pushes the description of a trace entry to the stack.
   func push(_ entry: TraceEntry) {
     let str = "\(entry.description)\n"
-    stack.insert(str.data(using: .utf8)!, at: 0)
+    let newEntry = StackEntry(prev: stack,
+                              data: strndup(str, str.count),
+                              count: str.count)
+    let newStack = UnsafeMutablePointer<StackEntry>.allocate(capacity: 1)
+    newStack.pointee = newEntry
+    stack = newStack
   }
 
   /// Pops the latest trace entry off the stack.
   func pop() {
-    guard !stack.isEmpty else { return }
-    stack.removeFirst()
+    guard let stack = stack else { return }
+    let prev = stack.pointee.prev
+    stack.deallocate(capacity: 1)
+    self.stack = prev
   }
 
   /// Dumps the stack entries to standard error, starting with the most
   /// recent entry.
   func dump(_ signal: Int32) {
-    stderr.write(stackDumpMsgData)
-    for entry in stack {
-      stderr.write(entry)
+    write(STDERR_FILENO, stackDumpMsg.data, stackDumpMsg.count)
+    var cur = stack
+    while cur != nil {
+      let entry = cur.unsafelyUnwrapped
+      write(STDERR_FILENO, entry.pointee.data, entry.pointee.count)
+      cur = entry.pointee.prev
     }
   }
 }
@@ -73,6 +121,11 @@ private var __stackContextKey = pthread_key_t()
 /// Creates a key for a thread-local reference to a PrettyStackTraceHandler.
 private var stackContextKey: pthread_key_t = {
   pthread_key_create(&__stackContextKey) { ptr in
+    #if os(Linux)
+    guard let ptr = ptr else {
+      return
+    }
+    #endif
     let unmanaged = Unmanaged<PrettyStackTraceManager>.fromOpaque(ptr)
     unmanaged.release()
   }
@@ -93,32 +146,15 @@ private func threadLocalHandler() -> PrettyStackTraceManager {
   return unmanaged.takeUnretainedValue()
 }
 
-/// A set of signals that would normally kill the program. We handle these
-/// signals by dumping the pretty stack trace description.
-let killSigs = [
-  SIGILL, SIGABRT, SIGTRAP, SIGFPE,
-  SIGBUS, SIGSEGV, SIGSYS, SIGQUIT
-]
-
-/// Needed because the type `sigaction` conflicts with the function `sigaction`.
-typealias SigAction = sigaction
-
-/// A wrapper that associates a signal handler with the number it handles.
-struct SigHandler {
-  /// The signal action, called when the handler is called.
-  var action: SigAction
-
-  /// The signal number this will fire on.
-  var signalNumber: Int32
+extension Int32 {
+  /// HACK: Just for compatibility's sake on Linux.
+  public init(bitPattern: Int32) { self = bitPattern }
 }
-
-/// The currently registered set of signal handlers.
-private var handlers = [SigHandler]()
 
 /// Registers the pretty stack trace signal handlers.
 private func registerHandler(signal: Int32) {
   var newHandler = SigAction()
-  newHandler.__sigaction_u.__sa_handler = {
+  let cHandler: @convention(c) (Int32) -> Swift.Void = { signalNumber in
     unregisterHandlers()
 
     // Unblock all potentially blocked kill signals
@@ -126,24 +162,42 @@ private func registerHandler(signal: Int32) {
     sigfillset(&sigMask)
     sigprocmask(SIG_UNBLOCK, &sigMask, nil)
 
-    threadLocalHandler().dump($0)
-    exit(-1)
+    threadLocalHandler().dump(signalNumber)
+    exit(signalNumber)
   }
-  newHandler.sa_flags = SA_NODEFER | SA_RESETHAND | SA_ONSTACK
+  #if os(macOS)
+  newHandler.__sigaction_u.__sa_handler = cHandler
+  #elseif os(Linux)
+  newHandler.__sigaction_handler = .init(sa_handler: cHandler)
+  #else
+  fatalError("Cannot register signal action handler on this platform")
+  #endif
+  newHandler.sa_flags = Int32(bitPattern: SA_NODEFER) |
+                        Int32(bitPattern: SA_RESETHAND) |
+                        Int32(bitPattern: SA_ONSTACK)
   sigemptyset(&newHandler.sa_mask)
 
   var handler = SigAction()
   if sigaction(signal, &newHandler, &handler) != 0 {
     let sh = SigHandler(action: handler, signalNumber: signal)
-    handlers.append(sh)
+    registeredSignalInfo[numRegisteredSignalInfo] = sh
+    numRegisteredSignalInfo += 1
   }
 }
 
 /// Unregisters all pretty stack trace signal handlers.
 private func unregisterHandlers() {
-  while var handler = handlers.popLast() {
-    sigaction(handler.signalNumber, &handler.action, nil)
+  var i = 0
+  while i < killSigs.count {
+    sigaction(registeredSignalInfo[i].signalNumber,
+              &registeredSignalInfo[i].action, nil)
+    i += 1
   }
+
+  // HACK: Must leak the old registerdSignalInfo because we cannot safely
+  //       free inside a signal handler.
+  // cannot: free(registeredSignalInfo)
+  numRegisteredSignalInfo = 0
 }
 
 /// A reference to the previous alternate stack, if any.
@@ -155,11 +209,16 @@ private var newAltStackPointer: UnsafeMutableRawPointer?
 /// Sets up an alternate stack and registers all signal handlers with the
 /// system.
 private let __setupStackOnce: Void = {
-  let altStackSize = UInt(MINSIGSTKSZ) + (UInt(64) * 1024)
+  #if os(macOS)
+  typealias SSSize = UInt
+  #else
+  typealias SSSize = Int
+  #endif
+  let altStackSize = SSSize(MINSIGSTKSZ) + (SSSize(64) * 1024)
 
   /// Make sure we're not currently executing on an alternate stack already.
   guard sigaltstack(nil, &oldAltStack) == 0 else { return }
-  guard oldAltStack.ss_flags & SS_ONSTACK == 0 else { return }
+  guard Int(oldAltStack.ss_flags) & Int(SS_ONSTACK) == 0 else { return }
   guard oldAltStack.ss_sp == nil || oldAltStack.ss_size < altStackSize else {
     return
   }
@@ -199,4 +258,3 @@ public func trace<T>(_ action: String, file: StaticString = #file,
   defer { h.pop() }
   return try actions()
 }
-

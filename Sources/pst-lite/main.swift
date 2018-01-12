@@ -18,25 +18,9 @@ func findAdjacentBinary(_ name: String) -> URL? {
 
 /// Runs `lite` looking for `.test` files and executing them.
 do {
-  let prettyStackTrace =
-    URL(fileURLWithPath: #file).deletingLastPathComponent()
-                               .deletingLastPathComponent()
-                               .appendingPathComponent("PrettyStackTrace")
-  var swiftInvocation = [
-    "swift", "-frontend", "-interpret", "-I", "\"\(prettyStackTrace.path)\""
-  ]
-  #if os(macOS)
-  let sdkPath = try! shellOut(to: "xcrun", arguments: ["--show-sdk-path"])
-  swiftInvocation += ["-sdk", "\"\(sdkPath)\""]
-  #endif
-  swiftInvocation.append("-enable-source-import")
-
-  let fullSwiftInvocation = swiftInvocation.joined(separator: " ")
-
   let fileCheck = findAdjacentBinary("pst-file-check")!
 
   let subs = [
-    ("swift", fullSwiftInvocation),
     ("FileCheck", fileCheck.path)
   ]
   let allPassed =

@@ -84,13 +84,15 @@ func run() -> Int {
   var checkPrefixes = results.get(prefixes) ?? []
   checkPrefixes.append("CHECK")
 
+  let data = fileHandle.readDataToEndOfFile()
+  print(String(data: data, encoding: .utf8)!)
   let matchedAll = fileCheckOutput(of: .stdout,
                                    withPrefixes: checkPrefixes,
                                    checkNot: [],
                                    against: .filePath(filePath),
                                    options: options) {
     // FIXME: Better way to stream this data?
-    FileHandle.standardOutput.write(fileHandle.readDataToEndOfFile())
+    FileHandle.standardOutput.write(data)
   }
 
   return matchedAll ? 0 : -1
