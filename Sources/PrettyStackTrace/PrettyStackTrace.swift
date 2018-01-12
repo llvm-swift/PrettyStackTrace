@@ -44,7 +44,8 @@ var numRegisteredSignalInfo = 0
 /// a kill signal, this handler will dump all the entries in the tack trace and
 /// end the process.
 private class PrettyStackTraceManager {
-  struct RawStackEntry {
+  struct StackEntry {
+    var prev: UnsafeMutablePointer<StackEntry>?
     let data: UnsafeMutablePointer<Int8>
     let count: Int
   }
@@ -52,41 +53,44 @@ private class PrettyStackTraceManager {
   /// Keeps a stack of serialized trace entries in reverse order.
   /// - Note: This keeps strings, because it's not safe to
   ///         construct the strings in the signal handler directly.
-  var stack = [RawStackEntry]()
+  var stack: UnsafeMutablePointer<StackEntry>? = nil
 
-  private let stackDumpMsg: RawStackEntry
+  private let stackDumpMsg: StackEntry
   init() {
     let msg = "Stack dump:\n"
-    stackDumpMsg = RawStackEntry(data: strndup(msg, msg.count),
-                                 count: msg.count)
+    stackDumpMsg = StackEntry(prev: nil,
+                              data: strndup(msg, msg.count),
+                              count: msg.count)
   }
 
   /// Pushes the description of a trace entry to the stack.
   func push(_ entry: TraceEntry) {
     let str = "\(entry.description)\n"
-    let entry = RawStackEntry(data: strndup(str, str.count),
+    let newEntry = StackEntry(prev: stack,
+                              data: strndup(str, str.count),
                               count: str.count)
-    stack.insert(entry, at: 0)
+    let newStack = UnsafeMutablePointer<StackEntry>.allocate(capacity: 1)
+    newStack.pointee = newEntry
+    stack = newStack
   }
 
   /// Pops the latest trace entry off the stack.
   func pop() {
-    guard !stack.isEmpty else { return }
-    stack.removeFirst()
+    guard let stack = stack else { return }
+    let prev = stack.pointee.prev
+    stack.deallocate(capacity: 1)
+    self.stack = prev
   }
 
   /// Dumps the stack entries to standard error, starting with the most
   /// recent entry.
   func dump(_ signal: Int32) {
     write(STDERR_FILENO, stackDumpMsg.data, stackDumpMsg.count)
-    let stackLimit = stack.count
-    stack.withUnsafeBufferPointer { buffer in
-      var i = 0
-      while i < stackLimit {
-        let bufItem = buffer[i]
-        write(STDERR_FILENO, bufItem.data, bufItem.count)
-        i += 1
-      }
+    var cur = stack
+    while cur != nil {
+      let entry = cur.unsafelyUnwrapped
+      write(STDERR_FILENO, entry.pointee.data, entry.pointee.count)
+      cur = entry.pointee.prev
     }
   }
 }
