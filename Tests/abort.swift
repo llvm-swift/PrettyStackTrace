@@ -9,7 +9,7 @@ import Glibc
 // CHECK-DAG: in first task!
 // CHECK-DAG: in second task!
 // CHECK-DAG: Stack dump
-// CHECK-DAG: -> While doing first task
+// CHECK-DAG:   1. While doing first task
 trace("doing first task") {
   print("in first task!")
   trace("doing second task") {

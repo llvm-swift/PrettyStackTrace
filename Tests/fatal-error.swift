@@ -4,8 +4,8 @@
 // CHECK-DAG: in second task!
 // CHECK-DAG: {{[fF]}}atal error: second task failed
 // CHECK-DAG: Stack dump
-// CHECK-DAG: -> While doing second task
-// CHECK-DAG: -> While doing first task
+// CHECK-DAG:   1. While doing second task
+// CHECK-DAG:   2. While doing first task
 trace("doing first task") {
   print("in first task!")
   trace("doing second task") {
