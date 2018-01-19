@@ -6,8 +6,8 @@ import Foundation
 // CHECK-DAG: about to raise!
 // CHECK-DAG: Terminating app due to uncaught exception 'NSGenericException', reason: 'You failed'
 // CHECK-DAG: Stack dump:
-// CHECK-DAG: -> While raising an exception
-// CHECK-DAG: -> While doing first task
+// CHECK-DAG:   1. While raising an exception
+// CHECK-DAG:   2. While doing first task
 trace("doing first task") {
   print("in first task!")
   trace("raising an exception") {

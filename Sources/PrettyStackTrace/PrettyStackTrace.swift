@@ -46,7 +46,7 @@ private struct TraceEntry: CustomStringConvertible {
   var description: String {
     let base = URL(fileURLWithPath: file.description).lastPathComponent
     return """
-           -> While \(action) (func \(function), in file \(base), line \(line))
+           While \(action) (func \(function), in file \(base), line \(line))
            """
   }
 }
@@ -58,6 +58,63 @@ var registeredSignalInfo =
     UnsafeMutablePointer.allocate(capacity: killSigs.count),
                                          count: killSigs.count)
 var numRegisteredSignalInfo = 0
+
+/// 8 digits + 2 spaces + 1 period + 1 space + 1 NULL terminator
+/// ought to be enough for anyone...
+let numberBuffer: UnsafeMutablePointer<Int8> = {
+  let count = 13
+  let ptr = UnsafeMutablePointer<Int8>.allocate(capacity: count)
+
+  /// NUL terminator
+  ptr[count - 1] = 0
+
+  return ptr
+}()
+
+/// Fills a pre-allocated 13-byte buffer with the following:
+///
+/// [' ', ' ', '1', '2', '3', '4', '5', '6', '7', '8', '.', ' ', '\0']
+///
+/// ensuring that the buffer only uses the exact digits from the integer and
+/// doesn't write outside the bounds of the buffer.
+/// It then writes the contents of this buffer, starting at the first space at
+/// the beginning, to stderr.
+func writeInt(_ int: UInt) {
+  // We can't write more than 8 digits.
+  guard int <= 99_999_999 else { return }
+  var int = int
+
+  // Fill the buffer from right to left, decrementing the pointer as we add
+  // characters and digits.
+
+  // First, add the '. ' at the end.
+  var end = numberBuffer.advanced(by: 12)
+  end.pointee = 32 /// (ascii ' ')
+  end = end.predecessor()
+  end.pointee = 46 /// (ascii '.')
+  end = end.predecessor()
+
+  // Next, pop successive digits off the end of the integer and add them to
+  // the current 'start' of the buffer.
+  while int > 0 {
+    let remInt = int.remainderReportingOverflow(dividingBy: 10).partialValue
+    let remInt8 = Int8(truncatingIfNeeded: remInt)
+    int = int.unsafeDivided(by: 10)
+    end.pointee = remInt8 &+ 48 /// (ascii '0')
+    end = end.predecessor()
+  }
+
+  // Add the '  ' at the current 'start' of the buffer.
+  end.pointee = 32 /// (ascii ' ')
+  end = end.predecessor()
+  end.pointee = 32 /// (ascii ' ')
+  // Don't move to the predecessor -- we're at the beginning of the string now.
+
+  // Find the distance between the end of the buffer and the beginning of our
+  // string.
+  let dist = abs(numberBuffer.advanced(by: 13).distance(to: end))
+  write(STDERR_FILENO, end, dist)
+}
 
 /// A class managing a stack of trace entries. When a particular thread gets
 /// a kill signal, this handler will dump all the entries in the tack trace and
@@ -84,7 +141,7 @@ private class PrettyStackTraceManager {
 
   /// Pushes the description of a trace entry to the stack.
   func push(_ entry: TraceEntry) {
-    let str = "  \(entry.description)\n"
+    let str = "\(entry.description)\n"
     let newEntry = StackEntry(prev: stack,
                               data: strndup(str, str.count),
                               count: str.count)
@@ -106,11 +163,14 @@ private class PrettyStackTraceManager {
   /// recent entry.
   func dump(_ signal: Int32) {
     write(STDERR_FILENO, stackDumpMsg.data, stackDumpMsg.count)
+    var i: UInt = 1
     var cur = stack
     while cur != nil {
+      writeInt(i)
       let entry = cur.unsafelyUnwrapped
       write(STDERR_FILENO, entry.pointee.data, entry.pointee.count)
       cur = entry.pointee.prev
+      i += 1
     }
   }
 }
@@ -215,6 +275,9 @@ private let __setupStackOnce: Void = {
   #else
   typealias SSSize = Int
   #endif
+
+  _ = numberBuffer
+
   let altStackSize = SSSize(MINSIGSTKSZ) + (SSSize(64) * 1024)
 
   /// Make sure we're not currently executing on an alternate stack already.
