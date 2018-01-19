@@ -79,7 +79,7 @@ let numberBuffer: UnsafeMutablePointer<Int8> = {
 /// doesn't write outside the bounds of the buffer.
 /// It then writes the contents of this buffer, starting at the first space at
 /// the beginning, to stderr.
-func writeInt(_ int: UInt) {
+private func writeLeadingSpacesAndStackPosition(_ int: UInt) {
   // We can't write more than 8 digits.
   guard int <= 99_999_999 else { return }
   var int = int
@@ -166,7 +166,7 @@ private class PrettyStackTraceManager {
     var i: UInt = 1
     var cur = stack
     while cur != nil {
-      writeInt(i)
+      writeLeadingSpacesAndStackPosition(i)
       let entry = cur.unsafelyUnwrapped
       write(STDERR_FILENO, entry.pointee.data, entry.pointee.count)
       cur = entry.pointee.prev
