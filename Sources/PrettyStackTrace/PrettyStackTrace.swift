@@ -155,7 +155,7 @@ private class PrettyStackTraceManager {
     guard let stack = stack else { return }
     let prev = stack.pointee.prev
     free(stack.pointee.data)
-    stack.deallocate(capacity: 1)
+    stack.deallocate()
     self.stack = prev
   }
 
