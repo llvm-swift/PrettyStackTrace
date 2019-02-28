@@ -70,7 +70,7 @@ func run() -> Int {
   }
 
   var options = FileCheckOptions()
-  binder.fill(results, into: &options)
+  try! binder.fill(parseResult: results, into: &options)
 
   let fileHandle: FileHandle
   if let input = results.get(inputFile) {

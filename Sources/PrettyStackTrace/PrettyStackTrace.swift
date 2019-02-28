@@ -1,6 +1,6 @@
 /// PrettyStackTrace.swift
 ///
-/// Copyright 2018, The LLVMSwift Project.
+/// Copyright 2018-2019, The LLVMSwift Project.
 ///
 /// This project is released under the MIT license, a copy of which is
 /// available in the repository.
@@ -99,7 +99,7 @@ private func writeLeadingSpacesAndStackPosition(_ int: UInt) {
   while int > 0 {
     let remInt = int.remainderReportingOverflow(dividingBy: 10).partialValue
     let remInt8 = Int8(truncatingIfNeeded: remInt)
-    int = int.unsafeDivided(by: 10)
+    int = int.dividedReportingOverflow(by: 10).0
     end.pointee = remInt8 &+ 48 /// (ascii '0')
     end = end.predecessor()
   }
