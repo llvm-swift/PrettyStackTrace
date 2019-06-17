@@ -1,4 +1,4 @@
-// swift-tools-version:4.2
+// swift-tools-version:5.0
 
 import PackageDescription
 
@@ -17,10 +17,10 @@ let package = Package(
   ],
   targets: [
     .target(name: "PrettyStackTrace", dependencies: []),
-    .target(name: "pst-lite", dependencies: ["LiteSupport", "Utility", "Symbolic"]),
+    .target(name: "pst-lite", dependencies: ["LiteSupport", "SPMUtility", "Symbolic"]),
     .target(
       name: "pst-file-check",
-      dependencies: ["FileCheck", "Utility"]),
+      dependencies: ["FileCheck", "SPMUtility"]),
 
   ]
 )
