@@ -17,7 +17,7 @@ func findAdjacentBinary(_ name: String) -> URL? {
 
 /// Runs `lite` looking for `.test` files and executing them.
 do {
-  let fileCheck = findAdjacentBinary("pst-file-check")!
+  let fileCheck = findAdjacentBinary("filecheck")!
 
   let subs = [
     ("FileCheck", fileCheck.path)
