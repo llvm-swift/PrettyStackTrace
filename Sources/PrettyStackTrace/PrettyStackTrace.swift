@@ -28,7 +28,8 @@ struct SigHandler {
 
 /// Represents an entry in a stack trace. Contains information necessary to
 /// reconstruct what was happening at the time this function was executed.
-private struct TraceEntry: CustomStringConvertible {
+@usableFromInline
+internal struct TraceEntry: CustomStringConvertible {
   /// A description, in gerund form, of what action was occurring at the time.
   /// For example, "typechecking a node".
   let action: String
@@ -43,11 +44,20 @@ private struct TraceEntry: CustomStringConvertible {
   let file: StaticString
 
   /// Constructs a string describing the entry, to be printed in order.
+  @usableFromInline
   var description: String {
     let base = URL(fileURLWithPath: file.description).lastPathComponent
     return """
            While \(action) (func \(function), in file \(base), line \(line))
            """
+  }
+
+  @usableFromInline
+  init(action: String, function: StaticString, line: Int, file: StaticString) {
+    self.action = action
+    self.function = function
+    self.line = line
+    self.file = file
   }
 }
 
@@ -119,7 +129,8 @@ private func writeLeadingSpacesAndStackPosition(_ int: UInt) {
 /// A class managing a stack of trace entries. When a particular thread gets
 /// a kill signal, this handler will dump all the entries in the tack trace and
 /// end the process.
-private class PrettyStackTraceManager {
+@usableFromInline
+internal class PrettyStackTraceManager {
   struct StackEntry {
     var prev: UnsafeMutablePointer<StackEntry>?
     let data: UnsafeMutablePointer<Int8>
@@ -140,6 +151,7 @@ private class PrettyStackTraceManager {
   }
 
   /// Pushes the description of a trace entry to the stack.
+  @usableFromInline
   func push(_ entry: TraceEntry) {
     let str = "\(entry.description)\n"
     let newEntry = StackEntry(prev: stack,
@@ -151,6 +163,7 @@ private class PrettyStackTraceManager {
   }
 
   /// Pops the latest trace entry off the stack.
+  @usableFromInline
   func pop() {
     guard let stack = stack else { return }
     let prev = stack.pointee.prev
@@ -196,7 +209,8 @@ private var stackContextKey: pthread_key_t = {
 /// A thread-local reference to a PrettyStackTraceManager.
 /// The first time this is created, this will create the handler and register
 /// it with `pthread_setspecific`.
-private func threadLocalHandler() -> PrettyStackTraceManager {
+@usableFromInline
+internal func threadLocalHandler() -> PrettyStackTraceManager {
   guard let specificPtr = pthread_getspecific(stackContextKey) else {
     let handler = PrettyStackTraceManager()
     let unmanaged = Unmanaged.passRetained(handler)
@@ -269,7 +283,8 @@ private var newAltStackPointer: UnsafeMutableRawPointer?
 
 /// Sets up an alternate stack and registers all signal handlers with the
 /// system.
-private let __setupStackOnce: Void = {
+@usableFromInline
+internal let __setupStackOnce: Void = {
   #if os(macOS)
   typealias SSSize = UInt
   #else
@@ -313,6 +328,7 @@ private let __setupStackOnce: Void = {
 ///   - actions: A closure containing the actual actions being performed.
 /// - Returns: The result of calling the provided `actions` closure.
 /// - Throws: Whatever is thrown by the `actions` closure.
+@_transparent
 public func trace<T>(_ action: String, file: StaticString = #file,
                      function: StaticString = #function, line: Int = #line,
                      actions: () throws -> T) rethrows -> T {
